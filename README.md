@@ -1,4 +1,4 @@
-# MQTT CyberChat - Romeobravo
+
 
 Chat privado e minimalista baseado em MQTT para comunicação em tempo real.
 
@@ -18,8 +18,3 @@ Chat privado e minimalista baseado em MQTT para comunicação em tempo real.
    - Clique em `Save`.
 
 4. **Pronto!** Seu chat estará disponível em `https://seu-usuario.github.io/seu-repositorio/`.
-
-## Configurações Atuais:
-- **Broker**: HiveMQ Cloud (Privado)
-- **Canal Padrão**: `romeobravo`
-- **Porta**: 8884 (WebSockets WSS)
