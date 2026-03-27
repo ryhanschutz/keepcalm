@@ -6,6 +6,9 @@ on:
       - 'v*' # Roda quando você cria uma tag (ex: git tag v1.0.0 e git push --tags)
   workflow_dispatch: # Permite rodar manualmente no painel do GitHub
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Opt-in para Node 24 para evitar depreciação
+
 jobs:
   release:
     runs-on: windows-latest
@@ -17,7 +20,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
