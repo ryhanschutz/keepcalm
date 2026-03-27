@@ -1,0 +1,11 @@
+node_modules/
+dist_build/
+KeepCalm-win32-x64/
+*.log
+build_err.log
+build_log.txt
+build_zip.log
+build_err_utf8.log
+build_zip_utf8.log
+.DS_Store
+Thumbs.db

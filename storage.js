@@ -4,11 +4,17 @@
 
 const Storage = (() => {
   let db = null;
+  let gun = null;
   const DB_NAME = 'keepcalm_db';
   const DB_VERSION = 1;
 
   // ── IndexedDB ─────────────────────────────────────────────────────────────
   async function init() {
+    if (window.Gun) {
+      // Conecta ao relay P2P
+      gun = Gun(['https://gun-manhattan.herokuapp.com/gun', 'https://relay.peer.ooo/gun']);
+    }
+
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = (e) => {
@@ -28,11 +34,20 @@ const Storage = (() => {
   }
 
   // ── Mensagens ─────────────────────────────────────────────────────────────
+  async function hasMessage(id) {
+    if (!id) return false;
+    return new Promise((resolve) => {
+      const r = db.transaction('messages', 'readonly').objectStore('messages').get(id);
+      r.onsuccess = () => resolve(!!r.result);
+      r.onerror   = () => resolve(false);
+    });
+  }
+
   async function saveMessage(roomId, msg) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('messages', 'readwrite');
       const s  = tx.objectStore('messages');
-      const r  = s.add({ roomId, ...msg, savedAt: Date.now() });
+      const r  = s.put({ roomId, ...msg, savedAt: Date.now() });
       r.onsuccess = () => resolve(r.result);
       r.onerror   = () => reject(r.error);
     });
@@ -67,6 +82,23 @@ const Storage = (() => {
         });
       };
       r.onerror = () => reject(r.error);
+    });
+  }
+
+  // ── Sincronismo P2P Historico (Gun.js) ────────────────────────────────────
+  function syncMessageP2P(roomId, payloadObj) {
+    if (!gun || !payloadObj.msgId) return;
+    const node = gun.get('kc_v2_history').get(roomId);
+    node.get(payloadObj.msgId).put(JSON.stringify(payloadObj));
+  }
+
+  function listenToRoomHistoryP2P(roomId, callback) {
+    if (!gun) return;
+    const node = gun.get('kc_v2_history').get(roomId);
+    node.map().once((dataStr) => {
+      try {
+        if (typeof dataStr === 'string') callback(JSON.parse(dataStr));
+      } catch (e) {}
     });
   }
 
@@ -130,21 +162,17 @@ const Storage = (() => {
   function clearUser()    { localStorage.removeItem('kc_user'); }
 
   // ── Sessões (rooms) ───────────────────────────────────────────────────────
-  function setRooms(rooms) { localStorage.setItem('kc_rooms', JSON.stringify(rooms)); }
-  function getRooms()      { try { return JSON.parse(localStorage.getItem('kc_rooms')) || []; } catch { return []; } }
+  function setRooms(rooms) { /* Desativado por privacidade */ }
+  function getRooms()      { return []; }
 
-  // Salva senha de sessão cifrada com chave de dispositivo
+  // Salva senha de sessão cifrada com chave de dispositivo (DESATIVADO por privacidade)
   async function saveSessionPassword(roomId, password) {
-    const map = _getSessionPassMap();
-    map[roomId] = await _encrypt(password);
-    localStorage.setItem('kc_sessions', JSON.stringify(map));
+    return;
   }
 
-  // Recupera senha de sessão
+  // Recupera senha de sessão (DESATIVADO por privacidade)
   async function getSessionPassword(roomId) {
-    const map = _getSessionPassMap();
-    if (!map[roomId]) return null;
-    try { return await _decrypt(map[roomId]); } catch { return null; }
+    return null;
   }
 
   function removeSessionPassword(roomId) {
@@ -160,7 +188,9 @@ const Storage = (() => {
   return {
     init,
     // Mensagens
-    saveMessage, getMessages, clearMessages,
+    saveMessage, getMessages, clearMessages, hasMessage,
+    // P2P Gun
+    syncMessageP2P, listenToRoomHistoryP2P,
     // Arquivos
     saveFile, getFile,
     // Usuário

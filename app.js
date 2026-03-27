@@ -36,10 +36,9 @@ const App = (() => {
 
     Storage.setUser({ username });
 
-    // Carregar e rejuntar salas salvas
-    rooms = Storage.getRooms();
-    await _rejoinSavedRooms();
+    // Iniciar vigilantes
     _startHeartbeat();
+    _initNetworkMonitoring();
   }
 
   // ── Conexão MQTT ──────────────────────────────────────────────────────────
@@ -70,6 +69,7 @@ const App = (() => {
       mqttClient.on('connect',   _onConnect);
       mqttClient.on('reconnect', () => UI.setConnectionStatus('reconnecting'));
       mqttClient.on('offline',   () => UI.setConnectionStatus('offline'));
+      mqttClient.on('close',     () => UI.setConnectionStatus('offline'));
       mqttClient.on('message',   _handleMessage);
 
       // Timeout
@@ -80,10 +80,13 @@ const App = (() => {
 
   function _onConnect() {
     UI.setConnectionStatus('online');
-    // Subscrever à presença global de todos os usuários
+    // Subscrever à presença global
     mqttClient.subscribe('keepcalm/presence/+', { qos: 0 });
-    // Re-anunciar presença em salas abertas
-    rooms.forEach(r => _publishPresence(r.id, 'online'));
+    // Re-subscrever a todas as salas que já estão abertas na memória (Sessão viva)
+    rooms.forEach(room => {
+      _subscribeRoom(room.id);
+      _publishPresence(room.id, 'online');
+    });
   }
 
   // ── Reatualização de salas após reconexão ─────────────────────────────────
@@ -113,14 +116,10 @@ const App = (() => {
     const key = await Crypto.deriveRoomKey(cleanId, roomPassword);
     roomCryptoKeys[cleanId] = key;
 
-    // Adicionar à lista se não existir
+    // Adicionar à lista em memória (Vivo apenas enquanto o app rodar)
     if (!rooms.find(r => r.id === cleanId)) {
       rooms.push({ id: cleanId, name: cleanId, createdAt: Date.now() });
-      Storage.setRooms(rooms);
     }
-
-    // Salvar senha cifrada em storage.js com master device key
-    await Storage.saveSessionPassword(cleanId, roomPassword);
 
     _subscribeRoom(cleanId);
     _publishPresence(cleanId, 'online');
@@ -134,8 +133,6 @@ const App = (() => {
     _unsubscribeRoom(roomId);
     delete roomCryptoKeys[roomId];
     rooms = rooms.filter(r => r.id !== roomId);
-    Storage.setRooms(rooms);
-    Storage.removeSessionPassword(roomId);
     await Storage.clearMessages(roomId);
     if (currentRoom === roomId) currentRoom = null;
   }
@@ -145,6 +142,10 @@ const App = (() => {
     mqttClient.subscribe(CONFIG.topics.roomPresence(roomId), { qos: 0 });
     mqttClient.subscribe(CONFIG.topics.roomTyping(roomId),   { qos: 0 });
     mqttClient.subscribe(CONFIG.topics.roomFiles(roomId),    { qos: 1 });
+
+    Storage.listenToRoomHistoryP2P(roomId, (payloadObj) => {
+      _processIncomingPayload(roomId, payloadObj);
+    });
   }
 
   function _unsubscribeRoom(roomId) {
@@ -160,7 +161,7 @@ const App = (() => {
       const payload = payloadBuf.toString();
       const parts   = topic.split('/');
       // keepcalm/rooms/{roomId}/messages
-      if (parts[1] === 'rooms' && parts[3] === 'messages')  { _onRoomMessage(parts[2], payload); return; }
+      if (parts[1] === 'rooms' && parts[3] === 'messages')  { _processIncomingPayload(parts[2], payload); return; }
       // keepcalm/rooms/{roomId}/presence
       if (parts[1] === 'rooms' && parts[3] === 'presence')  { _onPresence(parts[2], payload); return; }
       // keepcalm/rooms/{roomId}/typing
@@ -174,14 +175,34 @@ const App = (() => {
     }
   }
 
-  async function _onRoomMessage(roomId, payload) {
+  let _renderDebounce = null;
+  function _queueRoomRender(roomId) {
+    if (_renderDebounce) clearTimeout(_renderDebounce);
+    _renderDebounce = setTimeout(async () => {
+      if (roomId === currentRoom) {
+        const msgs = await Storage.getMessages(roomId);
+        UI.setMessages(msgs);
+        UI.scrollToBottom();
+      }
+    }, 150);
+  }
+
+  async function _processIncomingPayload(roomId, payload) {
     const key = roomCryptoKeys[roomId];
-    if (!key) return;
+    if (!key) return; // ignorado (sala fechada pelo user)
+    
     try {
-      const data = JSON.parse(payload);
+      const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
+
+      // MsgId p/ deduplicar Gun.js vs MQTT (fallback para os antigos)
+      const msgId = data.msgId || `old_${data.ts}_${Math.random().toString(36).slice(2, 8)}`;
+
+      if (await Storage.hasMessage(msgId)) return; // Já processada
+
       const text = await Crypto.decryptMessage(key, data.ciphertext, data.iv);
 
       const msg = {
+        id:        msgId,
         roomId,
         sender:    data.sender,
         text,
@@ -193,17 +214,20 @@ const App = (() => {
       await Storage.saveMessage(roomId, msg);
 
       if (roomId === currentRoom) {
-        UI.appendMessage(msg);
-        _publishPresence(roomId, 'online'); // refresca presença ao ler
+        _queueRoomRender(roomId);
+        _publishPresence(roomId, 'online');
       } else {
         unreadCounts[roomId] = (unreadCounts[roomId] || 0) + 1;
         UI.setRoomBadge(roomId, unreadCounts[roomId]);
-        if (data.sender !== currentUser.username) {
+        
+        // Notifica se for mensagem muito recente e não for do usuário
+        const isRecent = (Date.now() - (data.ts || Date.now())) < 5000;
+        if (data.sender !== currentUser.username && isRecent) {
           Notifications.notifyNewMessage(data.sender, text, roomId, roomId);
         }
       }
     } catch (e) {
-      console.warn('[Crypto] Falha ao decifrar — chave incorreta ou mensagem de outra sala.');
+      // Falha ao decifrar (outra sala ou lixo da rede)
     }
   }
 
@@ -313,13 +337,21 @@ const App = (() => {
     if (!key || !text.trim()) return;
 
     const { iv, ciphertext } = await Crypto.encryptMessage(key, text.trim());
-    const payload = JSON.stringify({
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const payloadObj = {
+      msgId,
       sender:     currentUser.username,
       iv,
       ciphertext,
       ts:         Date.now(),
-    });
-    mqttClient.publish(CONFIG.topics.roomMessages(roomId), payload, { qos: 1 });
+    };
+    
+    // MQTT envia como string
+    mqttClient.publish(CONFIG.topics.roomMessages(roomId), JSON.stringify(payloadObj), { qos: 1 });
+    
+    // Gun.js espalha como payload JSON na rede P2P durável
+    Storage.syncMessageP2P(roomId, payloadObj);
   }
 
   // ── Enviar indicador de digitando ─────────────────────────────────────────
@@ -418,10 +450,36 @@ const App = (() => {
     );
   }
 
-  // ── Heartbeat ─────────────────────────────────────────────────────────────
+  // ── Vigilantes de Rede e Saúde ───────────────────────────────────────────
+  function _initNetworkMonitoring() {
+    // Escuta quando o Wi-Fi ou cabo de rede volta fisicamente
+    window.addEventListener('online', () => {
+      if (mqttClient && !mqttClient.connected) {
+        UI.setConnectionStatus('reconnecting');
+        mqttClient.reconnect();
+      }
+    });
+
+    // Quando o usuário volta a focar no App (Alt+Tab), verifica se caiu
+    window.addEventListener('focus', () => {
+      if (mqttClient && !mqttClient.connected) {
+        mqttClient.reconnect();
+      }
+    });
+  }
+
   function _startHeartbeat() {
     heartbeatTimer = setInterval(() => {
-      if (currentRoom) _publishPresence(currentRoom, 'online');
+      if (!mqttClient) return;
+
+      // Forçar status no UI se o cliente do MQTT achar que está desconectado
+      if (!mqttClient.connected) {
+        UI.setConnectionStatus('offline');
+      }
+
+      if (currentRoom && mqttClient.connected) {
+        _publishPresence(currentRoom, 'online');
+      }
     }, CONFIG.app.heartbeatInterval);
   }
 
