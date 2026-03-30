@@ -146,6 +146,8 @@ const Storage = (() => {
 
   // ── Usuário (Phantom Mode) ────────────────────────────────────────────────
   function setUser(data)  { /* Não salva o nome */ }
+  function getUser()      { return null; }
+  function clearUser()    { /* n/a */ }
   // Verifica identidade no armazenamento local. Bloqueia se a senha do utilizador for incorreta.
   async function verifyUser(name, password) {
     const hash = await Crypto.hashPassword(password, name.toLowerCase());
