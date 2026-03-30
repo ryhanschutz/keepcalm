@@ -68,12 +68,27 @@ const Crypto = (() => {
     return await decryptMessage(roomKey, ciphertextB64, ivB64);
   }
 
+  // ── Hash de verificação de senha (para login local) ───────────────────────
+  async function hashPassword(password, username) {
+    const salt = new TextEncoder().encode(`keepcalm_user_salt::${username}`);
+    const keyMaterial = await subtle.importKey(
+      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']
+    );
+    const bits = await subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+      keyMaterial,
+      256
+    );
+    return bufferToBase64(bits);
+  }
+
   return {
     deriveRoomKey,
     encryptMessage,
     decryptMessage,
     encryptBinary,
     decryptBinary,
+    hashPassword,
     bufferToBase64,
     base64ToBuffer
   };

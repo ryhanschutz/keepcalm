@@ -30,31 +30,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # ── Injeção de Credenciais Secretas ────────────────────────────────────
-      # Gera config.secret.js com as credenciais reais do broker MQTT.
-      # Este arquivo NÃO existe no repositório (está no .gitignore), mas é
-      # criado aqui pelo CI e incluído no .exe empacotado pelo electron-builder.
-      #
-      # Configure os secrets em: Settings → Secrets and variables → Actions
-      #   MQTT_HOST     → ex: abc123.s1.eu.hivemq.cloud
-      #   MQTT_PORT     → ex: 8884
-      #   MQTT_USERNAME → ex: admin
-      #   MQTT_PASSWORD → sua senha segura
-      - name: Generate config.secret.js from GitHub Secrets
+      - name: Inject production credentials into config.js
         shell: pwsh
         run: |
-          $content = @"
-          // Gerado automaticamente pelo GitHub Actions — NÃO commitar.
-          const KC_SECRET = {
-            host:     '${{ secrets.MQTT_HOST }}',
-            port:     ${{ secrets.MQTT_PORT }},
-            url:      'wss://${{ secrets.MQTT_HOST }}:${{ secrets.MQTT_PORT }}/mqtt',
-            username: '${{ secrets.MQTT_USERNAME }}',
-            password: '${{ secrets.MQTT_PASSWORD }}',
-            gunRelays: []
-          };
-          "@
-          Set-Content -Path config.secret.js -Value $content -Encoding UTF8
+          $content = Get-Content -Path config.js -Raw
+          $content = $content -replace '__MQTT_HOST__', '${{ secrets.MQTT_HOST }}'
+          $content = $content -replace '''__MQTT_PORT__''', '${{ secrets.MQTT_PORT }}'
+          $content = $content -replace '__MQTT_USERNAME__', '${{ secrets.MQTT_USERNAME }}'
+          $content = $content -replace '__MQTT_PASSWORD__', '${{ secrets.MQTT_PASSWORD }}'
+          Set-Content -Path config.js -Value $content -Encoding UTF8
 
       - name: Build/release Electron app
         run: npx electron-builder --publish always

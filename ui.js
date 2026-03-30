@@ -6,7 +6,7 @@ const UI = (() => {
   let _typingTimeout = null;
   let _fileSendProgresses = {}; // transferId → element
   let _inactivityTimer = null;
-  const INACTIVITY_LIMIT = 10 * 1000; // 10 segundos (para teste)
+  const INACTIVITY_LIMIT = 5 * 60 * 1000; // 5 minutos
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);

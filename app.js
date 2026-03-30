@@ -27,8 +27,8 @@ const App = (() => {
   async function login(username, accessPw) {
     if (!username || !accessPw) throw new Error('Apelido e Senha de Acesso são obrigatórios.');
 
-    // Verifica se mudou o usuário (Se sim, Storage limpa o banco)
-    await Storage.verifyUser(username);
+    // Verifica se mudou o usuário ou se a senha confere
+    await Storage.verifyUser(username, accessPw);
 
     currentUser = { username };
     _accessPw   = accessPw;

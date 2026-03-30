@@ -146,12 +146,18 @@ const Storage = (() => {
 
   // ── Usuário (Phantom Mode) ────────────────────────────────────────────────
   function setUser(data)  { /* Não salva o nome */ }
-  function getUser()      { return null; }
-  function clearUser()    { /* n/a */ }
-
-  // No Phantom Mode, as identidades são efémeras. Não guardamos hashes de sessão.
-  async function verifyUser(name) {
-    return Promise.resolve();
+  // Verifica identidade no armazenamento local. Bloqueia se a senha do utilizador for incorreta.
+  async function verifyUser(name, password) {
+    const hash = await Crypto.hashPassword(password, name.toLowerCase());
+    const lastHash = localStorage.getItem('kc_user_hash');
+    
+    // Se for um utilizador conhecido mas a senha não bater:
+    if (lastHash && lastHash !== hash) {
+      throw new Error('Credenciais de sessão inválidas. Apelido e Senha incompatíveis com o registo.');
+    }
+    
+    // Salva ou renova o hash válido do utilizador.
+    localStorage.setItem('kc_user_hash', hash);
   }
 
   // ── Sessões / Salas ───────────────────────────────────────────────────────
