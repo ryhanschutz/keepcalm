@@ -31,14 +31,13 @@ jobs:
         run: npm install
 
       - name: Inject production credentials into config.js
-        shell: pwsh
         run: |
-          $content = Get-Content -Path config.js -Raw
-          $content = $content -replace '__MQTT_HOST__', '${{ secrets.MQTT_HOST }}'
-          $content = $content -replace '''__MQTT_PORT__''', '${{ secrets.MQTT_PORT }}'
-          $content = $content -replace '__MQTT_USERNAME__', '${{ secrets.MQTT_USERNAME }}'
-          $content = $content -replace '__MQTT_PASSWORD__', '${{ secrets.MQTT_PASSWORD }}'
-          Set-Content -Path config.js -Value $content -Encoding UTF8
+          node -e "const fs = require('fs'); let c = fs.readFileSync('config.js', 'utf8'); c = c.replace('__MQTT_HOST__', process.env.MQTT_HOST).replace('__MQTT_PORT__', process.env.MQTT_PORT).replace('__MQTT_USERNAME__', process.env.MQTT_USERNAME).replace('__MQTT_PASSWORD__', process.env.MQTT_PASSWORD); fs.writeFileSync('config.js', c);"
+        env:
+          MQTT_HOST: ${{ secrets.MQTT_HOST }}
+          MQTT_PORT: ${{ secrets.MQTT_PORT }}
+          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
 
       - name: Build/release Electron app
         run: npx electron-builder --publish always
