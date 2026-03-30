@@ -4,7 +4,7 @@
 
 const Notifications = (() => {
   let _unreadTotal = 0;
-  const BASE_TITLE = 'KeepCalm ☕';
+  const BASE_TITLE = 'KeepCalm';
 
   // ── Permissão ─────────────────────────────────────────────────────────────
   async function requestPermission() {
