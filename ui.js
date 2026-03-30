@@ -5,6 +5,8 @@ const UI = (() => {
   let _typingUsers = new Set();
   let _typingTimeout = null;
   let _fileSendProgresses = {}; // transferId → element
+  let _inactivityTimer = null;
+  const INACTIVITY_LIMIT = 10 * 1000; // 10 segundos (para teste)
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
@@ -12,6 +14,7 @@ const UI = (() => {
   // ── Inicialização ─────────────────────────────────────────────────────────
   function init() {
     _bindEvents();
+    _startInactivityTimer();
   }
 
   function _bindEvents() {
@@ -19,8 +22,22 @@ const UI = (() => {
     $('login-btn').addEventListener('click', _handleLogin);
     $('login-username').addEventListener('keydown', e => { if (e.key === 'Enter') _handleLogin(); });
 
-    // Logout
-    $('logout-btn').addEventListener('click', () => App.logout());
+    // Logout (Menu 3 pontos)
+    $('menu-logout').addEventListener('click', () => App.logout());
+
+    // Menu 3 Pontos (Toggle)
+    $('sb-menu-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      $('sb-dropdown').classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => $('sb-dropdown').classList.add('hidden'));
+
+    // Pânico: Apagar Tudo
+    $('menu-clear-db').addEventListener('click', async () => {
+      if (!confirm('ATENÇÃO: Isso apagará TODAS as mensagens, arquivos e configurações permanentemente. Confirmar?')) return;
+      await Storage.clearEverything();
+      window.location.reload();
+    });
 
     // Abrir modal de sala
     $('join-room-btn').addEventListener('click', () => showModal('join-room-modal'));
@@ -53,23 +70,48 @@ const UI = (() => {
     // Fechar sala
     $('leave-room-btn').addEventListener('click', _handleLeaveRoom);
 
+    // Lock Screen
+    $('lock-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        const pw = e.target.value;
+        if (App.unlock(pw)) {
+          e.target.value = '';
+          hideLockScreen();
+          _startInactivityTimer();
+        } else {
+          e.target.style.borderColor = 'var(--danger)';
+          setTimeout(() => { e.target.style.borderColor = ''; }, 500);
+        }
+      }
+    });
+
+    // Reset de inatividade ao interagir
+    const reset = () => _startInactivityTimer();
+    window.addEventListener('mousemove', reset);
+    window.addEventListener('keydown', reset);
+    window.addEventListener('click', reset);
+
     // Visibilidade da janela
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) Notifications.restoreTitle();
+      if (!document.hidden) {
+        Notifications.restoreTitle();
+        _startInactivityTimer();
+      }
     });
   }
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   async function _handleLogin() {
     const username = $('login-username').value.trim();
-    if (!username) {
-      _showLoginError('Digite um apelido.');
+    const accessPw = $('login-access-pw').value;
+    if (!username || !accessPw) {
+      _showLoginError('Digite apelido e senha de acesso.');
       return;
     }
     _setLoginLoading(true);
     _clearLoginError();
     try {
-      await App.login(username);
+      await App.login(username, accessPw);
       showApp(username);
       renderRoomsList(App.getState().rooms, App.getState().unreadCounts);
       await Notifications.requestPermission();
@@ -192,6 +234,18 @@ const UI = (() => {
     _clearModalError();
   }
 
+  // ── Re-entrada de sala salva (Opção B) ─────────────────────────────────────
+  // Chamado quando o usuário clica numa sala que já está na sidebar mas
+  // a senha não foi re-digitada nesta sessão. Pré-preenche o ID da sala.
+  function showRejoinModal(roomId) {
+    $('modal-room-id').value       = roomId;
+    $('modal-room-password').value = '';
+    _clearModalError();
+    showModal('join-room-modal');
+    // Focar direto no campo de senha (ID já está preenchido)
+    setTimeout(() => $('modal-room-password').focus(), 80);
+  }
+
   // ── Status de conexão ─────────────────────────────────────────────────────
   function setConnectionStatus(status) {
     const el  = $('conn-status');
@@ -299,7 +353,17 @@ const UI = (() => {
     const div = document.createElement('div');
     div.className = `msg ${msg.isMine ? 'msg-mine' : 'msg-theirs'}`;
     const isImg  = msg.mimeType && msg.mimeType.startsWith('image/');
+    const isPDF  = msg.mimeType === 'application/pdf' || (msg.fileName && msg.fileName.toLowerCase().endsWith('.pdf'));
+    const isZip  = (msg.mimeType && (msg.mimeType.includes('zip') || msg.mimeType.includes('rar') || msg.mimeType.includes('compressed'))) ||
+                   (msg.fileName && (msg.fileName.toLowerCase().endsWith('.zip') || msg.fileName.toLowerCase().endsWith('.rar') || msg.fileName.toLowerCase().endsWith('.7z')));
+    
     const sizeStr = msg.fileSize ? ` · ${_formatSize(msg.fileSize)}` : '';
+
+    let iconId = '#icon-clip';
+    let iconClass = '';
+    if (isImg) iconId = '#icon-image';
+    else if (isPDF) { iconId = '#icon-pdf'; iconClass = 'pdf-icon'; }
+    else if (isZip) { iconId = '#icon-archive'; iconClass = 'zip-icon'; }
 
     div.innerHTML = `
       <div class="msg-meta">
@@ -308,7 +372,7 @@ const UI = (() => {
       </div>
       <div class="msg-bubble msg-file" id="file-msg-${msg.transferId}">
         <div class="file-header">
-          <span class="file-icon"><svg><use href="${isImg ? '#icon-image' : '#icon-clip'}"/></svg></span>
+          <span class="file-icon ${iconClass}"><svg><use href="${iconId}"/></svg></span>
           <span class="file-name">${_esc(msg.fileName)}</span>
           <span class="file-size">${sizeStr}</span>
         </div>
@@ -525,6 +589,26 @@ const UI = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
+  // ── Phantom Mode / Lock ───────────────────────────────────────────────────
+  function _startInactivityTimer() {
+    if (_inactivityTimer) clearTimeout(_inactivityTimer);
+    if ($('lock-screen').classList.contains('hidden')) {
+      _inactivityTimer = setTimeout(() => {
+        showLockScreen();
+      }, INACTIVITY_LIMIT);
+    }
+  }
+
+  function showLockScreen() {
+    $('lock-screen').classList.remove('hidden');
+    $('lock-input').focus();
+    App.lock(); // Invalida chaves na RAM
+  }
+
+  function hideLockScreen() {
+    $('lock-screen').classList.add('hidden');
+  }
+
   return {
     init,
     showLogin,
@@ -532,6 +616,9 @@ const UI = (() => {
     showApp,
     showModal,
     hideModal,
+    showRejoinModal,
+    showLockScreen,
+    hideLockScreen,
     setConnectionStatus,
     renderRoomsList,
     highlightRoom,

@@ -1,18 +1,29 @@
-// KeepCalm — Storage (Device-Key + IndexedDB)
-// Sessões salvas com chave de dispositivo local (AES-GCM, transparente ao usuário)
+// KeepCalm — Storage (IndexedDB + GunDB descentralizado)
+// Modo Fantasma: senhas de sessão jamais persistidas no disco.
+// GunDB armazena apenas ciphertexts AES-256-GCM — relays nunca veem conteúdo legível.
+// IDs de sala são hasheados antes de ir para o Gun (nenhum relay sabe os nomes das salas).
 'use strict';
 
 const Storage = (() => {
-  let db = null;
+  let db  = null;
   let gun = null;
-  const DB_NAME = 'keepcalm_db';
+  const DB_NAME    = 'keepcalm_db';
   const DB_VERSION = 1;
 
-  // ── IndexedDB ─────────────────────────────────────────────────────────────
+  // ── Hash do roomId para uso no Gun (privacidade do nome da sala) ──────────
+  // Os relays Gun veem apenas o hash SHA-256, nunca o ID real da sala.
+  async function _hashRoomId(roomId) {
+    const buf  = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`kc_room::${roomId}`));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // ── Inicialização ─────────────────────────────────────────────────────────
   async function init() {
+    // Conectar ao GunDB usando os relays definidos em CONFIG
     if (window.Gun) {
-      // Conecta ao relay P2P
-      gun = Gun(['https://gun-manhattan.herokuapp.com/gun', 'https://relay.peer.ooo/gun']);
+      const relays = (CONFIG && CONFIG.gun && CONFIG.gun.relays) || [];
+      gun = relays.length > 0 ? Gun(relays) : Gun(); // sem server = só localStorage/P2P local
+      console.info('[Gun] Conectado a', relays.length > 0 ? relays : 'modo local');
     }
 
     return new Promise((resolve, reject) => {
@@ -21,7 +32,7 @@ const Storage = (() => {
         const d = e.target.result;
         if (!d.objectStoreNames.contains('messages')) {
           const s = d.createObjectStore('messages', { keyPath: 'id', autoIncrement: true });
-          s.createIndex('roomId', 'roomId', { unique: false });
+          s.createIndex('roomId',    'roomId',    { unique: false });
           s.createIndex('timestamp', 'timestamp', { unique: false });
         }
         if (!d.objectStoreNames.contains('files')) {
@@ -33,7 +44,7 @@ const Storage = (() => {
     });
   }
 
-  // ── Mensagens ─────────────────────────────────────────────────────────────
+  // ── Mensagens (IndexedDB local) ───────────────────────────────────────────
   async function hasMessage(id) {
     if (!id) return false;
     return new Promise((resolve) => {
@@ -85,24 +96,37 @@ const Storage = (() => {
     });
   }
 
-  // ── Sincronismo P2P Historico (Gun.js) ────────────────────────────────────
-  function syncMessageP2P(roomId, payloadObj) {
+  // ── Sincronismo P2P Descentralizado (GunDB) ───────────────────────────────
+  // Publica o payload cifrado na rede Gun usando o HASH do roomId como chave.
+  // Relays externos veem apenas: hash_da_sala → { msgId: ciphertext_blob }
+  // Nenhum conteúdo legível sai do dispositivo.
+  async function syncMessageP2P(roomId, payloadObj) {
     if (!gun || !payloadObj.msgId) return;
-    const node = gun.get('kc_v2_history').get(roomId);
-    node.get(payloadObj.msgId).put(JSON.stringify(payloadObj));
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_v3').get(roomHash).get(payloadObj.msgId).put(JSON.stringify(payloadObj));
+    } catch (e) {
+      console.warn('[Gun] Erro ao sincronizar:', e);
+    }
   }
 
-  function listenToRoomHistoryP2P(roomId, callback) {
+  // Escuta o histórico descentralizado ao entrar numa sala.
+  // Ignora mensagens que já existem no IndexedDB local (deduplicação).
+  async function listenToRoomHistoryP2P(roomId, callback) {
     if (!gun) return;
-    const node = gun.get('kc_v2_history').get(roomId);
-    node.map().once((dataStr) => {
-      try {
-        if (typeof dataStr === 'string') callback(JSON.parse(dataStr));
-      } catch (e) {}
-    });
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_v3').get(roomHash).map().once((dataStr) => {
+        try {
+          if (typeof dataStr === 'string') callback(JSON.parse(dataStr));
+        } catch (_) {}
+      });
+    } catch (e) {
+      console.warn('[Gun] Erro ao escutar histórico:', e);
+    }
   }
 
-  // ── Arquivos ──────────────────────────────────────────────────────────────
+  // ── Arquivos (IndexedDB local) ────────────────────────────────────────────
   async function saveFile(transferId, blob, meta) {
     return new Promise((resolve, reject) => {
       const r = db.transaction('files', 'readwrite').objectStore('files')
@@ -120,83 +144,60 @@ const Storage = (() => {
     });
   }
 
-  // ── Chave de dispositivo (gerada uma vez, salva em localStorage) ──────────
-  // Usada para cifrar as senhas das sessões localmente, de forma transparente.
-  async function _getDeviceKey() {
-    let raw = localStorage.getItem('kc_devkey');
-    if (!raw) {
-      const keyBytes = window.crypto.getRandomValues(new Uint8Array(32));
-      raw = btoa(String.fromCharCode(...keyBytes));
-      localStorage.setItem('kc_devkey', raw);
+  // ── Usuário (Phantom Mode) ────────────────────────────────────────────────
+  function setUser(data)  { /* Não salva o nome */ }
+  function getUser()      { return null; }
+  function clearUser()    { /* n/a */ }
+
+  // Verifica se o usuário mudou. Salva apenas HASH SHA-256 (não o nome).
+  async function verifyUser(name) {
+    const hashBuffer = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(name.toLowerCase()));
+    const hash       = btoa(String.fromCharCode(...new Uint8Array(hashBuffer)));
+    const lastHash   = localStorage.getItem('kc_last_hash');
+    if (lastHash && lastHash !== hash) {
+      console.warn('Troca de identidade detectada. Limpando rastro local…');
+      await clearEverything();
     }
-    const binary = atob(raw);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return await window.crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    localStorage.setItem('kc_last_hash', hash);
   }
 
-  async function _encrypt(text) {
-    const key = await _getDeviceKey();
-    const iv  = window.crypto.getRandomValues(new Uint8Array(12));
-    const enc = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
-    const buf = new Uint8Array(12 + enc.byteLength);
-    buf.set(iv, 0);
-    buf.set(new Uint8Array(enc), 12);
-    return btoa(String.fromCharCode(...buf));
+  // ── Sessões / Salas ───────────────────────────────────────────────────────
+  // Opção B: Lembra IDs das salas entre sessões, mas NUNCA as senhas.
+  function setRooms(rooms) {
+    localStorage.setItem('kc_rooms', JSON.stringify(rooms));
+  }
+  function getRooms() {
+    try { return JSON.parse(localStorage.getItem('kc_rooms')) || []; } catch { return []; }
   }
 
-  async function _decrypt(b64) {
-    const key = await _getDeviceKey();
-    const bin = atob(b64);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-    const iv  = buf.slice(0, 12);
-    const enc = buf.slice(12);
-    const dec = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, enc);
-    return new TextDecoder().decode(dec);
-  }
+  // Senhas vivem APENAS na RAM durante a sessão. Zero persistência no disco.
+  async function saveSessionPassword(roomId, password) { /* no-op: Opção B */ }
+  async function getSessionPassword(roomId)            { return null; }
+  function      removeSessionPassword(roomId)          { /* no-op: Opção B */ }
 
-  // ── Usuário ───────────────────────────────────────────────────────────────
-  function setUser(data)  { localStorage.setItem('kc_user', JSON.stringify(data)); }
-  function getUser()      { try { return JSON.parse(localStorage.getItem('kc_user')); } catch { return null; } }
-  function clearUser()    { localStorage.removeItem('kc_user'); }
-
-  // ── Sessões (rooms) ───────────────────────────────────────────────────────
-  function setRooms(rooms) { /* Desativado por privacidade */ }
-  function getRooms()      { return []; }
-
-  // Salva senha de sessão cifrada com chave de dispositivo (DESATIVADO por privacidade)
-  async function saveSessionPassword(roomId, password) {
-    return;
-  }
-
-  // Recupera senha de sessão (DESATIVADO por privacidade)
-  async function getSessionPassword(roomId) {
-    return null;
-  }
-
-  function removeSessionPassword(roomId) {
-    const map = _getSessionPassMap();
-    delete map[roomId];
-    localStorage.setItem('kc_sessions', JSON.stringify(map));
-  }
-
-  function _getSessionPassMap() {
-    try { return JSON.parse(localStorage.getItem('kc_sessions')) || {}; } catch { return {}; }
+  // ── Limpar tudo ───────────────────────────────────────────────────────────
+  async function clearEverything() {
+    return new Promise((resolve, reject) => {
+      localStorage.clear();
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror   = () => reject(new Error('Falha ao apagar banco local.'));
+    });
   }
 
   return {
     init,
     // Mensagens
     saveMessage, getMessages, clearMessages, hasMessage,
-    // P2P Gun
+    // P2P descentralizado (GunDB com IDs hasheados)
     syncMessageP2P, listenToRoomHistoryP2P,
     // Arquivos
     saveFile, getFile,
     // Usuário
-    setUser, getUser, clearUser,
+    setUser, getUser, clearUser, verifyUser,
     // Sessões
     setRooms, getRooms,
     saveSessionPassword, getSessionPassword, removeSessionPassword,
+    clearEverything
   };
 })();

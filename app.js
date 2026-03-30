@@ -13,32 +13,33 @@ const App = (() => {
   let typingTimers  = {};
   let heartbeatTimer = null;
   let fileChunks    = {};     // transferId → { meta, chunks[], received }
+  let _accessPw     = null;
+  let _isLocked     = false;
 
   // ── Inicialização ─────────────────────────────────────────────────────────
   async function init() {
     await Storage.init();
-    const saved = Storage.getUser();
-    if (saved) {
-      UI.showLoginWithSavedUser(saved.username);
-    } else {
-      UI.showLogin();
-    }
+    // No Phantom Mode, nunca lembramos o usuário. Sempre tela de login limpa.
+    UI.showLogin();
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────
-  async function login(username) {
-    if (!username) throw new Error('Apelido é obrigatório.');
+  async function login(username, accessPw) {
+    if (!username || !accessPw) throw new Error('Apelido e Senha de Acesso são obrigatórios.');
+
+    // Verifica se mudou o usuário (Se sim, Storage limpa o banco)
+    await Storage.verifyUser(username);
 
     currentUser = { username };
+    _accessPw   = accessPw;
 
     // Conectar ao MQTT
     await _connectMQTT(username);
 
-    Storage.setUser({ username });
-
-    // Iniciar vigilantes
+    // Iniciar vigilantes e carregar sessões anteriores (Ninja Mode)
     _startHeartbeat();
     _initNetworkMonitoring();
+    _rejoinSavedRooms();
   }
 
   // ── Conexão MQTT ──────────────────────────────────────────────────────────
@@ -90,25 +91,19 @@ const App = (() => {
   }
 
   // ── Reatualização de salas após reconexão ─────────────────────────────────
+  // ── Reatualização de salas após reconexão / Início ────────────────────────
+  // Opção B: Carrega os IDs das salas salvas na memória, mas NÃO as senhas.
+  // As salas aparecem na sidebar; o usuário deve clicar e re-digitar a senha
+  // para reativar a criptografia e receber mensagens.
   async function _rejoinSavedRooms() {
-    const savedRooms = Storage.getRooms();
-    for (const room of savedRooms) {
-      try {
-        const pw = await Storage.getSessionPassword(room.id);
-        if (pw) {
-          const key = await Crypto.deriveRoomKey(room.id, pw);
-          roomCryptoKeys[room.id] = key;
-          _subscribeRoom(room.id);
-          _publishPresence(room.id, 'online');
-        }
-      } catch (e) {
-        console.warn('Erro ao rejoinar sala:', room.id, e);
-      }
-    }
+    rooms = Storage.getRooms();
+    // Chaves ficam ausentes até o usuário autenticar cada sala novamente
+    UI.renderRoomsList(rooms, unreadCounts);
   }
 
   // ── Entrar em sala / Sessão ───────────────────────────────────────────────
   async function joinRoom(roomId, roomPassword) {
+    if (_isLocked) throw new Error('App Bloqueado.');
     const cleanId = roomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
     if (!cleanId || !roomPassword) throw new Error('Nome e senha da sala são obrigatórios.');
 
@@ -116,10 +111,12 @@ const App = (() => {
     const key = await Crypto.deriveRoomKey(cleanId, roomPassword);
     roomCryptoKeys[cleanId] = key;
 
-    // Adicionar à lista em memória (Vivo apenas enquanto o app rodar)
+    // Persistência de ID (Opção B): Salva apenas o ID da sala, nunca a senha.
     if (!rooms.find(r => r.id === cleanId)) {
       rooms.push({ id: cleanId, name: cleanId, createdAt: Date.now() });
+      Storage.setRooms(rooms);
     }
+    // Senha fica SOMENTE na RAMcomo roomCryptoKeys[cleanId] — zero disco.
 
     _subscribeRoom(cleanId);
     _publishPresence(cleanId, 'online');
@@ -133,6 +130,8 @@ const App = (() => {
     _unsubscribeRoom(roomId);
     delete roomCryptoKeys[roomId];
     rooms = rooms.filter(r => r.id !== roomId);
+    Storage.setRooms(rooms);
+    // Não há senha salva para remover (Opção B)
     await Storage.clearMessages(roomId);
     if (currentRoom === roomId) currentRoom = null;
   }
@@ -333,8 +332,14 @@ const App = (() => {
 
   // ── Enviar mensagem ───────────────────────────────────────────────────────
   async function sendMessage(roomId, text) {
+    if (_isLocked) return;
     const key = roomCryptoKeys[roomId];
-    if (!key || !text.trim()) return;
+    if (!key) {
+      // Se não tem chave (expirou/bloqueou), pede senha
+      UI.showModal('join-room-modal');
+      return;
+    }
+    if (!text.trim()) return;
 
     const { iv, ciphertext } = await Crypto.encryptMessage(key, text.trim());
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -363,6 +368,7 @@ const App = (() => {
 
   // ── Enviar arquivo ────────────────────────────────────────────────────────
   async function sendFile(roomId, file) {
+    if (_isLocked) return;
     const key = roomCryptoKeys[roomId];
     if (!key) return;
 
@@ -415,7 +421,14 @@ const App = (() => {
 
   // ── Trocar de sala ────────────────────────────────────────────────────────
   async function switchRoom(roomId) {
-    if (currentRoom === roomId) return;
+    if (_isLocked || currentRoom === roomId) return;
+
+    // Se não temos a chave criptográfica (sala salva mas senha não foi re-digitada),
+    // abrir o modal de entrada pré-preenchido com o ID da sala.
+    if (!roomCryptoKeys[roomId]) {
+      UI.showRejoinModal(roomId);
+      return;
+    }
 
     if (currentRoom) _publishPresence(currentRoom, 'offline');
     currentRoom = roomId;
@@ -472,6 +485,9 @@ const App = (() => {
     heartbeatTimer = setInterval(() => {
       if (!mqttClient) return;
 
+      // Sinal Fantasma: Mantém a conexão TCP ocupada para não dropar
+      mqttClient.publish('keepcalm/ping', '1', { qos: 0 });
+
       // Forçar status no UI se o cliente do MQTT achar que está desconectado
       if (!mqttClient.connected) {
         UI.setConnectionStatus('offline');
@@ -480,7 +496,7 @@ const App = (() => {
       if (currentRoom && mqttClient.connected) {
         _publishPresence(currentRoom, 'online');
       }
-    }, CONFIG.app.heartbeatInterval);
+    }, 15000); // 15 segundos para manter firme 24/7
   }
 
   // ── Logout ────────────────────────────────────────────────────────────────
@@ -518,18 +534,37 @@ const App = (() => {
 
   function startHeartbeat() { _startHeartbeat(); }
 
+  // ── Lock / Unlock ─────────────────────────────────────────────────────────
+  function lock() {
+    _isLocked = true;
+    // O PULO DO GATO: Limpamos as chaves da memória RAM
+    // Isso garante que mesmo que alguém acesse o PC, não há nada legível
+    roomCryptoKeys = {};
+    UI.renderRoomsList(rooms, unreadCounts);
+  }
+
+  function unlock(pw) {
+    if (pw === _accessPw) {
+      _isLocked = false;
+      return true;
+    }
+    return false;
+  }
+
   return {
     init,
     login,
     logout,
     joinRoom,
     leaveRoom,
-    sendMessage,
-    sendTyping,
-    sendFile,
     switchRoom,
+    sendMessage,
+    sendFile,
+    sendTyping,
     startHeartbeat,
-    getState,
+    getState: () => ({ currentUser, currentRoom, rooms, unreadCounts, roomCryptoKeys, isLocked: _isLocked }),
     isInRoom,
+    lock,
+    unlock
   };
 })();

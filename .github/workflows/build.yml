@@ -3,11 +3,11 @@ name: Build/Release Electron App
 on:
   push:
     tags:
-      - 'v*' # Roda quando você cria uma tag (ex: git tag v1.0.0 e git push --tags)
+      - 'v*' # Roda quando você cria uma tag (ex: git tag v1.2.0 && git push --tags)
   workflow_dispatch: # Permite rodar manualmente no painel do GitHub
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Opt-in para Node 24 conforme instrução do GitHub
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
@@ -29,8 +29,34 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # ── Injeção de Credenciais Secretas ────────────────────────────────────
+      # Gera config.secret.js com as credenciais reais do broker MQTT.
+      # Este arquivo NÃO existe no repositório (está no .gitignore), mas é
+      # criado aqui pelo CI e incluído no .exe empacotado pelo electron-builder.
+      #
+      # Configure os secrets em: Settings → Secrets and variables → Actions
+      #   MQTT_HOST     → ex: abc123.s1.eu.hivemq.cloud
+      #   MQTT_PORT     → ex: 8884
+      #   MQTT_USERNAME → ex: admin
+      #   MQTT_PASSWORD → sua senha segura
+      - name: Generate config.secret.js from GitHub Secrets
+        shell: pwsh
+        run: |
+          $content = @"
+          // Gerado automaticamente pelo GitHub Actions — NÃO commitar.
+          const KC_SECRET = {
+            host:     '${{ secrets.MQTT_HOST }}',
+            port:     ${{ secrets.MQTT_PORT }},
+            url:      'wss://${{ secrets.MQTT_HOST }}:${{ secrets.MQTT_PORT }}/mqtt',
+            username: '${{ secrets.MQTT_USERNAME }}',
+            password: '${{ secrets.MQTT_PASSWORD }}',
+            gunRelays: []
+          };
+          "@
+          Set-Content -Path config.secret.js -Value $content -Encoding UTF8
+
       - name: Build/release Electron app
         run: npx electron-builder --publish always
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}

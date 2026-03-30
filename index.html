@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>KeepCalm ☕</title>
   <meta name="description" content="Sessões de chat E2EE via MQTT." />
-  <link rel="icon" type="image/x-icon" href="./favicon.ico" />
+  <link rel="icon" type="image/x-icon" href="./icon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -343,16 +343,106 @@
     }
 
     #logout-btn {
+      display: none; /* Escondido no menu 3 pontos */
+    }
+
+    .sb-menu-btn {
       background: none;
       padding: 6px;
       border-radius: var(--r);
       color: var(--text3);
       flex-shrink: 0;
+      position: relative;
     }
 
-    #logout-btn:hover {
-      color: var(--danger);
+    .sb-menu-btn:hover {
+      color: var(--text);
       background: var(--bg3);
+    }
+
+    /* Menu Dropdown */
+    .dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 1000;
+      min-width: 160px;
+      margin-top: 5px;
+      padding: 5px 0;
+    }
+
+    .dropdown-item {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .dropdown-item:hover {
+      background: var(--bg3);
+    }
+
+    .dropdown-item.danger {
+      color: var(--danger);
+    }
+
+    /* ── Lock Screen (Phantom Mode) ────────────────────── */
+    #lock-screen {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.3s ease;
+      color: #fff;
+    }
+
+    .lock-box {
+      text-align: center;
+      width: 280px;
+    }
+
+    .lock-title {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 20px;
+      opacity: 0.8;
+      letter-spacing: 0.5px;
+    }
+
+    #lock-input {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: var(--r);
+      padding: 12px;
+      color: #fff;
+      text-align: center;
+      font-size: 16px;
+      outline: none;
+      margin-bottom: 15px;
+    }
+
+    #lock-input:focus {
+      border-color: var(--accent);
+    }
+
+    .lock-hint {
+      font-size: 11px;
+      opacity: 0.5;
+      margin-top: 10px;
     }
 
     #logout-btn svg {
@@ -1051,21 +1141,41 @@
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
       </symbol>
       <symbol id="icon-hash" viewBox="0 0 24 24">
-        <path
-          d="M16.035 4L14.7 9h-3.414l1.334-5H10.61l-1.334 5H5.857v2h3.181l-.801 3H5v2h3.048l-1.335 5h2.016l1.334-5h3.414l-1.334 5h2.016l1.334-5h3.429v-2h-3.18l.8-3h3.228v-2h-3.047l1.335-5h-2.016zm-2.858 10h-3.414l.801-3h3.414l-.801 3z" />
+        <path d="M16.035 4L14.7 9h-3.414l1.334-5H10.61l-1.334 5H5.857v2h3.181l-.801 3H5v2h3.048l-1.335 5h2.016l1.334-5h3.414l-1.334 5h2.016l1.334-5h3.429v-2h-3.18l.8-3h3.228v-2h-3.047l1.335-5h-2.016zm-2.858 10h-3.414l.801-3h3.414l-.801 3z" />
+      </symbol>
+      <symbol id="icon-dots" viewBox="0 0 24 24">
+        <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+      </symbol>
+      <symbol id="icon-pdf" viewBox="0 0 24 24">
+        <path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8.5 7.5c0 .83-.67 1.5-1.5 1.5H9v2H7.5V7H10c.83 0 1.5.67 1.5 1.5v1zm5 2c0 .83-.67 1.5-1.5 1.5h-2.5V7H15c.83 0 1.5.67 1.5 1.5v3zm4-3.5h-1.25v1H18v1.25h-1.25V13H15V7h4.25v1.25zM9 10h1V8H9v2zm5.25 2.25h1v-3.5h-1v3.5zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z" />
+      </symbol>
+      <symbol id="icon-archive" viewBox="0 0 24 24">
+        <path d="M20.5 4h-17c-.82 0-1.5.67-1.5 1.5V19c0 .83.68 1.5 1.5 1.5h17c.83 0 1.5-.67 1.5-1.5V5.5c0-.83-.67-1.5-1.5-1.5zM12 11h-2v2h2v2h2v-2h2v-2h-2v-2h-2v2zM5 11h2v2H5v-2zm12 0h2v2h-2v-2z" />
       </symbol>
       <symbol id="icon-download" viewBox="0 0 24 24">
         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
       </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+      </symbol>
     </defs>
   </svg>
+
+  <!-- ── Lock Screen ──────────────────────────────────────── -->
+  <div id="lock-screen" class="hidden">
+    <div class="lock-box">
+      <div class="lock-title">SESSÃO BLOQUEADA</div>
+      <input type="password" id="lock-input" placeholder="Senha de Acesso" />
+      <div class="lock-hint">Inatividade detectada (5 min)</div>
+    </div>
+  </div>
 
   <!-- ── Conectar (no place for password) ───────────────────── -->
   <div id="login-screen">
     <div class="login-wrap">
       <div class="login-box">
         <div class="login-logo">
-          <img src="./favicon.ico" alt="KeepCalm" class="login-icon" />
+          <img src="./icon.ico" alt="KeepCalm" class="login-icon" />
           <h1 class="login-title">Identificação</h1>
           <p class="login-sub">Nenhuma conta é exigida.<br>Defina seu apelido para a sessão.</p>
         </div>
@@ -1074,6 +1184,11 @@
           <label for="login-username">Apelido</label>
           <input id="login-username" class="login-input" type="text" placeholder="Ex: John Doe" autocomplete="username"
             maxlength="32" spellcheck="false" />
+        </div>
+
+        <div class="login-field">
+          <label for="login-access-pw">Senha de Acesso (Local)</label>
+          <input id="login-access-pw" class="login-input" type="password" placeholder="Para bloquear o app" autocomplete="current-password" />
         </div>
 
         <!-- Campo de senha removido -->
@@ -1091,7 +1206,7 @@
   <div id="app-screen" class="hidden">
     <aside id="sidebar">
       <div class="sb-top">
-        <img src="./favicon.ico" alt="" class="sb-logo" />
+        <img src="./icon.ico" alt="" class="sb-logo" />
         <span class="sb-brand">KeepCalm</span>
       </div>
 
@@ -1104,9 +1219,17 @@
             <span id="conn-status">Conectando…</span>
           </span>
         </div>
-        <button id="logout-btn" title="Desconectar"><svg>
-            <use href="#icon-logout" />
-          </svg></button>
+        <button class="sb-menu-btn" id="sb-menu-btn" title="Menu">
+          <svg><use href="#icon-dots" /></svg>
+          <div id="sb-dropdown" class="dropdown hidden">
+            <div class="dropdown-item" id="menu-logout">
+              <svg><use href="#icon-logout" /></svg> Sair
+            </div>
+            <div class="dropdown-item danger" id="menu-clear-db">
+              <svg><use href="#icon-trash" /></svg> Apagar Tudo
+            </div>
+          </div>
+        </button>
       </div>
 
       <div class="sb-section">
@@ -1194,6 +1317,9 @@
   </div>
 
   <!-- SCRIPTS -->
+  <!-- config.secret.js é carregado como script síncrono antes de config.js.
+       Gitignored — em produção não existe e o erro é silenciado via try/catch no config.js. -->
+  <script src="./config.secret.js" onerror="window.__secretMissing=true"></script>
   <script src="./config.js"></script>
   <script src="./crypto.js"></script>
   <script src="./storage.js"></script>

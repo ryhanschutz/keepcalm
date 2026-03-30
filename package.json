@@ -1,6 +1,6 @@
 {
   "name": "keepcalm-secure",
-  "version": "1.1.7",
+  "version": "1.1.9",
   "description": "KeepCalm E2EE P2P Desktop Client",
   "main": "main.js",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ryhanschutz/keepcalm.git"
+    "url": "https://github.com/ryhanschutz/keepcalm-yole.git"
   },
   "build": {
     "appId": "com.ryhanschutz.keepcalm",
@@ -19,24 +19,17 @@
       "output": "dist_build"
     },
     "win": {
-      "target": "nsis",
+      "target": "portable",
       "icon": "icon.ico"
     },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowElevation": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "KeepCalm",
-      "installerIcon": "icon.ico",
-      "uninstallerIcon": "icon.ico"
+    "portable": {
+      "artifactName": "KeepCalm.exe",
+      "requestExecutionLevel": "user"
     },
     "publish": {
       "provider": "github",
       "owner": "ryhanschutz",
-      "repo": "keepcalm"
+      "repo": "keepcalm-yole"
     }
   },
   "author": "Ryhan Schutz",
@@ -45,5 +38,8 @@
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
     "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
