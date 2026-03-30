@@ -6,7 +6,7 @@
 const CONFIG = {
   mqtt: {
     host:            '__MQTT_HOST__',
-    port:            __MQTT_PORT__,
+    port:            '__MQTT_PORT__',
     url:             'wss://__MQTT_HOST__:__MQTT_PORT__/mqtt',
     username:        '__MQTT_USERNAME__',
     password:        '__MQTT_PASSWORD__',
