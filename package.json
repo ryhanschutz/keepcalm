@@ -20,7 +20,7 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "icon.png"
+      "icon": "favicon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -28,8 +28,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "KeepCalm",
-      "installerIcon": "icon.png",
-      "uninstallerIcon": "icon.png"
+      "installerIcon": "favicon.ico",
+      "uninstallerIcon": "favicon.ico"
     },
     "publish": {
       "provider": "github",
