@@ -1,6 +1,6 @@
 {
   "name": "keepcalm-secure",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "KeepCalm E2EE P2P Desktop Client",
   "main": "main.js",
   "scripts": {
@@ -14,7 +14,7 @@
   },
   "build": {
     "appId": "com.ryhanschutz.keepcalm",
-    "productName": "KeepCalm",
+    "productName": "Notas",
     "directories": {
       "output": "dist_build"
     },
@@ -23,7 +23,7 @@
       "icon": "icon.ico"
     },
     "portable": {
-      "artifactName": "KeepCalm.exe",
+      "artifactName": "Notas.exe",
       "requestExecutionLevel": "user"
     },
     "publish": {

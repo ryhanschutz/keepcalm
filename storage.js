@@ -149,16 +149,9 @@ const Storage = (() => {
   function getUser()      { return null; }
   function clearUser()    { /* n/a */ }
 
-  // Verifica se o usuário mudou. Salva apenas HASH SHA-256 (não o nome).
+  // No Phantom Mode, as identidades são efémeras. Não guardamos hashes de sessão.
   async function verifyUser(name) {
-    const hashBuffer = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(name.toLowerCase()));
-    const hash       = btoa(String.fromCharCode(...new Uint8Array(hashBuffer)));
-    const lastHash   = localStorage.getItem('kc_last_hash');
-    if (lastHash && lastHash !== hash) {
-      console.warn('Troca de identidade detectada. Limpando rastro local…');
-      await clearEverything();
-    }
-    localStorage.setItem('kc_last_hash', hash);
+    return Promise.resolve();
   }
 
   // ── Sessões / Salas ───────────────────────────────────────────────────────

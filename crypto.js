@@ -68,71 +68,12 @@ const Crypto = (() => {
     return await decryptMessage(roomKey, ciphertextB64, ivB64);
   }
 
-  // ── Proteger chave de sala com senha do usuário (para armazenamento local) ─
-  // Usado para salvar a senha da sala de forma segura no localStorage
-  async function encryptRoomPassword(password, userPassword) {
-    const salt = window.crypto.getRandomValues(new Uint8Array(16));
-    const iv = window.crypto.getRandomValues(new Uint8Array(12));
-    const keyMaterial = await subtle.importKey(
-      'raw', new TextEncoder().encode(userPassword), 'PBKDF2', false, ['deriveKey']
-    );
-    const wrappingKey = await subtle.deriveKey(
-      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-    const encoded = new TextEncoder().encode(password);
-    const encrypted = await subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, encoded);
-    return {
-      salt: bufferToBase64(salt),
-      iv: bufferToBase64(iv),
-      data: bufferToBase64(encrypted)
-    };
-  }
-
-  async function decryptRoomPassword(protectedData, userPassword) {
-    const salt = base64ToBuffer(protectedData.salt);
-    const iv = base64ToBuffer(protectedData.iv);
-    const encrypted = base64ToBuffer(protectedData.data);
-    const keyMaterial = await subtle.importKey(
-      'raw', new TextEncoder().encode(userPassword), 'PBKDF2', false, ['deriveKey']
-    );
-    const wrappingKey = await subtle.deriveKey(
-      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-    const decrypted = await subtle.decrypt({ name: 'AES-GCM', iv }, wrappingKey, encrypted);
-    return new TextDecoder().decode(decrypted);
-  }
-
-  // ── Hash de verificação de senha (para login local) ───────────────────────
-  async function hashPassword(password, username) {
-    const salt = new TextEncoder().encode(`keepcalm_user_salt::${username}`);
-    const keyMaterial = await subtle.importKey(
-      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']
-    );
-    const bits = await subtle.deriveBits(
-      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-      keyMaterial,
-      256
-    );
-    return bufferToBase64(bits);
-  }
-
   return {
     deriveRoomKey,
     encryptMessage,
     decryptMessage,
     encryptBinary,
     decryptBinary,
-    encryptRoomPassword,
-    decryptRoomPassword,
-    hashPassword,
     bufferToBase64,
     base64ToBuffer
   };

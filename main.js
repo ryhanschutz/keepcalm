@@ -27,8 +27,15 @@ async function _wipeAllData() {
         storages: ['localstorage', 'indexeddb', 'cookies', 'cachestorage', 'serviceworkers', 'websql']
       });
     }
+    // Nuclear Option: Delete physical KeepCalm_Data folder quietly if portable
+    if (isPortable) {
+      const dp = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'KeepCalm_Data');
+      if (fs.existsSync(dp)) {
+        fs.rmSync(dp, { recursive: true, force: true });
+      }
+    }
   } catch (e) {
-    console.error('[WIPE] Erro ao limpar dados:', e);
+    // Silent fail if files are locked
   }
 }
 
@@ -42,7 +49,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      backgroundThrottling: false // Evita que o SO congele o chat em background
+      backgroundThrottling: false, // Evita que o SO congele o chat em background
+      devTools: false // Impede auditoria de memória via console inspector
     },
     // ── Título Neutro ────────────────────────────────────────────────────────
     // Aparece como "Notas" no Alt+Tab e no Gerenciador de Tarefas
@@ -97,7 +105,7 @@ function _createTray() {
   const iconPath = path.join(__dirname, 'icon.ico');
   tray = new Tray(iconPath);
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Abrir KeepCalm', click: () => { mainWindow.show(); } },
+    { label: 'Abrir', click: () => { mainWindow.show(); } },
     { type: 'separator' },
     { label: 'Sair Completamente', click: () => {
         isQuitting = true;
@@ -105,7 +113,7 @@ function _createTray() {
       }
     }
   ]);
-  tray.setToolTip('KeepCalm — Chat Seguro');
+  tray.setToolTip('Notas em background');
   tray.setContextMenu(contextMenu);
   tray.on('double-click', () => { mainWindow.show(); });
 }
