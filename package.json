@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ryhanschutz/keepcalm-yole.git"
+    "url": "https://github.com/ryhanschutz/keepcalm.git"
   },
   "build": {
     "appId": "com.ryhanschutz.keepcalm",
@@ -29,7 +29,7 @@
     "publish": {
       "provider": "github",
       "owner": "ryhanschutz",
-      "repo": "keepcalm-yole"
+      "repo": "keepcalm"
     }
   },
   "author": "Ryhan Schutz",
