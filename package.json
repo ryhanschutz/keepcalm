@@ -30,6 +30,11 @@
       "shortcutName": "KeepCalm",
       "installerIcon": "favicon.ico",
       "uninstallerIcon": "favicon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "ryhanschutz",
+      "repo": "keepcalm"
     }
   },
   "author": "Ryhan Schutz",

@@ -6,8 +6,8 @@ on:
       - 'v*' # Roda quando você cria uma tag (ex: git tag v1.0.0 e git push --tags)
   workflow_dispatch: # Permite rodar manualmente no painel do GitHub
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Opt-in para Node 24 para evitar depreciação
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -21,12 +21,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
       - name: Build/release Electron app
-        uses: samuelmeuli/action-electron-builder@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          release: true
+        run: npm run dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
