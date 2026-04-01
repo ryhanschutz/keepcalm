@@ -3,24 +3,28 @@
 
 const App = (() => {
   // ── Estado ────────────────────────────────────────────────────────────────
-  let mqttClient    = null;
-  let currentUser   = null;   // { username }
-  let currentRoom   = null;   // roomId string
-  let rooms         = [];     // [{ id, name, createdAt }]
+  let mqttClient = null;
+  let currentUser = null;   // { username }
+  let currentRoom = null;   // roomId string
+  let rooms = [];     // [{ id, name, createdAt }]
   let roomCryptoKeys = {};    // roomId → CryptoKey (AES-256-GCM)
-  let onlineInRoom  = {};     // roomId → Set<string>
-  let unreadCounts  = {};     // roomId → number
-  let typingTimers  = {};
+  let onlineInRoom = {};     // roomId → Set<string>
+  let unreadCounts = {};     // roomId → number
+  let typingTimers = {};
   let heartbeatTimer = null;
-  let fileChunks    = {};     // transferId → { meta, chunks[], received }
-  let _accessPw     = null;
-  let _isLocked     = false;
+  let fileChunks = {};     // transferId → { meta, chunks[], received }
+  let _accessPw = null;
+  let _isLocked = false;
 
   // ── Inicialização ─────────────────────────────────────────────────────────
   async function init() {
-    await Storage.init();
-    // No Phantom Mode, nunca lembramos o usuário. Sempre tela de login limpa.
-    UI.showLogin();
+    try {
+      await Storage.init();
+      UI.showLogin();
+    } catch (e) {
+      console.error('[App] Init falhou:', e);
+      throw e;
+    }
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────
@@ -31,10 +35,13 @@ const App = (() => {
     await Storage.verifyUser(username, accessPw);
 
     currentUser = { username };
-    _accessPw   = accessPw;
+    _accessPw = accessPw;
 
-    // Conectar ao MQTT
-    await _connectMQTT(username);
+    // Conectar ao MQTT (FUNDO/ASSÍNCRONO - Não bloqueia a sessão)
+    _connectMQTT(username).catch(err => {
+      console.warn('[MQTT] Opcional falhou:', err.message);
+      UI.setConnectionStatus('offline');
+    });
 
     // Iniciar vigilantes e carregar sessões anteriores (Ninja Mode)
     _startHeartbeat();
@@ -45,33 +52,33 @@ const App = (() => {
   // ── Conexão MQTT ──────────────────────────────────────────────────────────
   async function _connectMQTT(username) {
     return new Promise((resolve, reject) => {
-      const clientId = `kc_${username.replace(/\W/g,'')}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+      const clientId = `kc_${username.replace(/\W/g, '')}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const willPayload = JSON.stringify({ username, status: 'offline', ts: Date.now() });
 
       mqttClient = mqtt.connect(CONFIG.mqtt.url, {
         clientId,
-        username:       CONFIG.mqtt.username,
-        password:       CONFIG.mqtt.password,
-        keepalive:      CONFIG.mqtt.keepalive,
+        username: CONFIG.mqtt.username,
+        password: CONFIG.mqtt.password,
+        keepalive: CONFIG.mqtt.keepalive,
         reconnectPeriod: CONFIG.mqtt.reconnectPeriod,
         connectTimeout: CONFIG.mqtt.connectTimeout,
-        clean:          true,
+        clean: true,
         will: {
-          topic:   CONFIG.topics.userPresence(username),
+          topic: CONFIG.topics.userPresence(username),
           payload: willPayload,
-          qos:     1,
-          retain:  true,
+          qos: 1,
+          retain: true,
         },
       });
 
       mqttClient.once('connect', () => resolve());
-      mqttClient.once('error',   (err) => reject(new Error(`Erro MQTT: ${err.message}`)));
+      mqttClient.once('error', (err) => reject(new Error(`Erro MQTT: ${err.message}`)));
 
-      mqttClient.on('connect',   _onConnect);
+      mqttClient.on('connect', _onConnect);
       mqttClient.on('reconnect', () => UI.setConnectionStatus('reconnecting'));
-      mqttClient.on('offline',   () => UI.setConnectionStatus('offline'));
-      mqttClient.on('close',     () => UI.setConnectionStatus('offline'));
-      mqttClient.on('message',   _handleMessage);
+      mqttClient.on('offline', () => UI.setConnectionStatus('offline'));
+      mqttClient.on('close', () => UI.setConnectionStatus('offline'));
+      mqttClient.on('message', _handleMessage);
 
       // Timeout
       const t = setTimeout(() => reject(new Error('Tempo esgotado ao conectar ao broker.')), CONFIG.mqtt.connectTimeout);
@@ -104,9 +111,10 @@ const App = (() => {
   // ── Entrar em sala / Sessão ───────────────────────────────────────────────
   async function joinRoom(roomId, roomPassword) {
     if (_isLocked) throw new Error('App Bloqueado.');
-    const cleanId = roomId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const cleanId = (roomId || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
     if (!cleanId || !roomPassword) throw new Error('Nome e senha da sala são obrigatórios.');
 
+    console.log('[App] joinRoom:', cleanId);
     // Derivar chave com a senha de fora
     const key = await Crypto.deriveRoomKey(cleanId, roomPassword);
     roomCryptoKeys[cleanId] = key;
@@ -116,10 +124,10 @@ const App = (() => {
       rooms.push({ id: cleanId, name: cleanId, createdAt: Date.now() });
       Storage.setRooms(rooms);
     }
-    // Senha fica SOMENTE na RAMcomo roomCryptoKeys[cleanId] — zero disco.
 
     _subscribeRoom(cleanId);
     _publishPresence(cleanId, 'online');
+    console.log('[App] Sala aberta com sucesso:', cleanId);
 
     return cleanId;
   }
@@ -137,13 +145,42 @@ const App = (() => {
   }
 
   function _subscribeRoom(roomId) {
-    mqttClient.subscribe(CONFIG.topics.roomMessages(roomId), { qos: 1 });
-    mqttClient.subscribe(CONFIG.topics.roomPresence(roomId), { qos: 0 });
-    mqttClient.subscribe(CONFIG.topics.roomTyping(roomId),   { qos: 0 });
-    mqttClient.subscribe(CONFIG.topics.roomFiles(roomId),    { qos: 1 });
+    if (mqttClient && mqttClient.connected) {
+      mqttClient.subscribe(CONFIG.topics.roomMessages(roomId), { qos: 1 });
+      mqttClient.subscribe(CONFIG.topics.roomPresence(roomId), { qos: 0 });
+      mqttClient.subscribe(CONFIG.topics.roomTyping(roomId), { qos: 0 });
+      mqttClient.subscribe(CONFIG.topics.roomFiles(roomId), { qos: 1 });
+    }
 
+    // LISTENER P2P (GunDB) — PRINCIPAL
     Storage.listenToRoomHistoryP2P(roomId, (payloadObj) => {
       _processIncomingPayload(roomId, payloadObj);
+    });
+
+    // Presença P2P
+    Storage.listenPresenceP2P(roomId, (username, data) => {
+      if (!onlineInRoom[roomId]) onlineInRoom[roomId] = new Set();
+      if (data.status === 'online') {
+        const isRecent = (Date.now() - data.ts) < 60000; // 1 minuto de tolerância
+        if (isRecent) onlineInRoom[roomId].add(username);
+      } else {
+        onlineInRoom[roomId].delete(username);
+      }
+      if (roomId === currentRoom) UI.updateOnlineList(Array.from(onlineInRoom[roomId]));
+    });
+
+    // Digitando P2P
+    Storage.listenTypingP2P(roomId, (username, ts) => {
+      if (username === currentUser.username) return;
+      if (roomId !== currentRoom) return;
+      const isTyping = (Date.now() - ts) < 4000;
+      if (isTyping) {
+        UI.showTyping(username);
+        clearTimeout(typingTimers[username]);
+        typingTimers[username] = setTimeout(() => UI.hideTyping(username), 4000);
+      } else {
+        UI.hideTyping(username);
+      }
     });
   }
 
@@ -158,22 +195,23 @@ const App = (() => {
   function _handleMessage(topic, payloadBuf) {
     try {
       const payload = payloadBuf.toString();
-      const parts   = topic.split('/');
+      const parts = topic.split('/');
       // keepcalm/rooms/{roomId}/messages
-      if (parts[1] === 'rooms' && parts[3] === 'messages')  { _processIncomingPayload(parts[2], payload); return; }
+      if (parts[1] === 'rooms' && parts[3] === 'messages') { _processIncomingPayload(parts[2], payload); return; }
       // keepcalm/rooms/{roomId}/presence
-      if (parts[1] === 'rooms' && parts[3] === 'presence')  { _onPresence(parts[2], payload); return; }
+      if (parts[1] === 'rooms' && parts[3] === 'presence') { _onPresence(parts[2], payload); return; }
       // keepcalm/rooms/{roomId}/typing
-      if (parts[1] === 'rooms' && parts[3] === 'typing')    { _onTyping(parts[2], payload); return; }
+      if (parts[1] === 'rooms' && parts[3] === 'typing') { _onTyping(parts[2], payload); return; }
       // keepcalm/rooms/{roomId}/files/{transferId}
-      if (parts[1] === 'rooms' && parts[3] === 'files')     { _onFileChunk(parts[2], parts[4], payload); return; }
+      if (parts[1] === 'rooms' && parts[3] === 'files') { _onFileChunk(parts[2], parts[4], payload); return; }
       // keepcalm/presence/{username}
-      if (parts[1] === 'presence')                          { _onGlobalPresence(parts[2], payload); return; }
+      if (parts[1] === 'presence') { _onGlobalPresence(parts[2], payload); return; }
     } catch (e) {
       console.error('[MQTT] Erro ao processar mensagem:', e);
     }
   }
 
+  // Chamado quando o histórico ou a sala precisa ser recarregada em lote
   let _renderDebounce = null;
   function _queueRoomRender(roomId) {
     if (_renderDebounce) clearTimeout(_renderDebounce);
@@ -181,52 +219,50 @@ const App = (() => {
       if (roomId === currentRoom) {
         const msgs = await Storage.getMessages(roomId);
         UI.setMessages(msgs);
-        UI.scrollToBottom();
       }
     }, 150);
   }
 
   async function _processIncomingPayload(roomId, payload) {
+    if (!payload || _isLocked) return;
     const key = roomCryptoKeys[roomId];
-    if (!key) return; // ignorado (sala fechada pelo user)
-    
+    if (!key) return; // Mensagem para sala não-autenticada ou já fechada
+
     try {
       const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
-
-      // MsgId p/ deduplicar Gun.js vs MQTT (fallback para os antigos)
       const msgId = data.msgId || `old_${data.ts}_${Math.random().toString(36).slice(2, 8)}`;
 
-      if (await Storage.hasMessage(msgId)) return; // Já processada
+      // 1. Deduplicação P2P vs Broker
+      if (await Storage.hasMessage(msgId)) return;
 
+      // 2. Decriptografia
       const text = await Crypto.decryptMessage(key, data.ciphertext, data.iv);
+      if (!text) return;
 
       const msg = {
-        id:        msgId,
+        id: msgId,
         roomId,
-        sender:    data.sender,
+        sender: data.sender,
         text,
         timestamp: data.ts || Date.now(),
-        type:      'text',
-        isMine:    data.sender === currentUser.username,
+        type: 'text',
+        isMine: data.sender === currentUser.username,
       };
 
+      // 3. Persistência
       await Storage.saveMessage(roomId, msg);
 
+      // 4. UI Update
       if (roomId === currentRoom) {
-        _queueRoomRender(roomId);
-        _publishPresence(roomId, 'online');
-      } else {
+        UI.appendMessage(msg);
+        _publishPresence(roomId, 'online'); // Heartbeat implícito
+      } else if (!msg.isMine) {
         unreadCounts[roomId] = (unreadCounts[roomId] || 0) + 1;
         UI.setRoomBadge(roomId, unreadCounts[roomId]);
-        
-        // Notifica se for mensagem muito recente e não for do usuário
-        const isRecent = (Date.now() - (data.ts || Date.now())) < 5000;
-        if (data.sender !== currentUser.username && isRecent) {
-          Notifications.notifyNewMessage(data.sender, text, roomId, roomId);
-        }
+        Notifications.notifyNewMessage(data.sender, text, roomId, roomId);
       }
     } catch (e) {
-      // Falha ao decifrar (outra sala ou lixo da rede)
+      console.warn('[Decript] Erro ou chave inválida para payload na sala:', roomId);
     }
   }
 
@@ -235,9 +271,9 @@ const App = (() => {
       const data = JSON.parse(payload);
       if (!onlineInRoom[roomId]) onlineInRoom[roomId] = new Set();
       if (data.status === 'online') onlineInRoom[roomId].add(data.username);
-      else                          onlineInRoom[roomId].delete(data.username);
+      else onlineInRoom[roomId].delete(data.username);
       if (roomId === currentRoom) UI.updateOnlineList(Array.from(onlineInRoom[roomId]));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function _onTyping(roomId, payload) {
@@ -248,14 +284,14 @@ const App = (() => {
       UI.showTyping(data.username);
       clearTimeout(typingTimers[data.username]);
       typingTimers[data.username] = setTimeout(() => UI.hideTyping(data.username), CONFIG.app.typingTimeout);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function _onGlobalPresence(username, payload) {
     try {
       const data = JSON.parse(payload);
       UI.updateGlobalUserStatus(username, data.status);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // ── Recepção de arquivo por chunks ────────────────────────────────────────
@@ -267,8 +303,8 @@ const App = (() => {
 
       if (data.type === 'meta') {
         fileChunks[transferId] = {
-          meta:     data,
-          chunks:   new Array(data.totalChunks).fill(null),
+          meta: data,
+          chunks: new Array(data.totalChunks).fill(null),
           received: 0,
         };
         if (data.sender !== currentUser.username) {
@@ -294,7 +330,7 @@ const App = (() => {
           // Remontar arquivo
           const fullBase64 = fc.chunks.join('');
           const binary = atob(fullBase64);
-          const bytes  = new Uint8Array(binary.length);
+          const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           const blob = new Blob([bytes], { type: fc.meta.mimeType || 'application/octet-stream' });
 
@@ -302,15 +338,15 @@ const App = (() => {
 
           const msg = {
             roomId,
-            sender:     fc.meta.sender,
-            text:       fc.meta.filename,
-            timestamp:  fc.meta.ts || Date.now(),
-            type:       'file',
+            sender: fc.meta.sender,
+            text: fc.meta.filename,
+            timestamp: fc.meta.ts || Date.now(),
+            type: 'file',
             transferId,
-            fileName:   fc.meta.filename,
-            mimeType:   fc.meta.mimeType,
-            fileSize:   fc.meta.fileSize,
-            isMine:     fc.meta.sender === currentUser.username,
+            fileName: fc.meta.filename,
+            mimeType: fc.meta.mimeType,
+            fileSize: fc.meta.fileSize,
+            isMine: fc.meta.sender === currentUser.username,
           };
           await Storage.saveMessage(roomId, msg);
 
@@ -335,7 +371,6 @@ const App = (() => {
     if (_isLocked) return;
     const key = roomCryptoKeys[roomId];
     if (!key) {
-      // Se não tem chave (expirou/bloqueou), pede senha
       UI.showModal('join-room-modal');
       return;
     }
@@ -346,24 +381,35 @@ const App = (() => {
 
     const payloadObj = {
       msgId,
-      sender:     currentUser.username,
+      sender: currentUser.username,
       iv,
       ciphertext,
-      ts:         Date.now(),
+      ts: Date.now(),
     };
-    
-    // MQTT envia como string
-    mqttClient.publish(CONFIG.topics.roomMessages(roomId), JSON.stringify(payloadObj), { qos: 1 });
-    
-    // Gun.js espalha como payload JSON na rede P2P durável
+
+    // 1. P2P (GunDB) — Via principal e durável
     Storage.syncMessageP2P(roomId, payloadObj);
+
+    // 2. MQTT — Via secundária para notificações push rápidas (se conectado)
+    if (mqttClient && mqttClient.connected) {
+      mqttClient.publish(CONFIG.topics.roomMessages(roomId), JSON.stringify(payloadObj), { qos: 1 });
+    }
+
+    // 3. Processa localmente de imediato (UX instantânea)
+    try {
+      _processIncomingPayload(roomId, payloadObj);
+    } catch (e) {
+      console.error('[App] Erro no loopback local:', e);
+    }
   }
 
   // ── Enviar indicador de digitando ─────────────────────────────────────────
-  function sendTyping(roomId) {
-    if (!mqttClient) return;
-    const payload = JSON.stringify({ username: currentUser.username, ts: Date.now() });
-    mqttClient.publish(CONFIG.topics.roomTyping(roomId), payload, { qos: 0 });
+  async function sendTyping(roomId) {
+    Storage.syncTypingP2P(roomId, currentUser.username, true);
+    if (mqttClient && mqttClient.connected) {
+      const payload = JSON.stringify({ username: currentUser.username, ts: Date.now() });
+      mqttClient.publish(CONFIG.topics.roomTyping(roomId), payload, { qos: 0 });
+    }
   }
 
   // ── Enviar arquivo ────────────────────────────────────────────────────────
@@ -377,12 +423,12 @@ const App = (() => {
     }
 
     const transferId = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const CHUNK      = CONFIG.app.chunkSizeBytes;
+    const CHUNK = CONFIG.app.chunkSizeBytes;
 
     // Ler arquivo como base64
     const base64 = await new Promise((res, rej) => {
       const reader = new FileReader();
-      reader.onload  = e => res(e.target.result.split(',')[1]);
+      reader.onload = e => res(e.target.result.split(',')[1]);
       reader.onerror = rej;
       reader.readAsDataURL(file);
     });
@@ -396,14 +442,14 @@ const App = (() => {
 
     // Publicar meta
     const meta = {
-      type:        'meta',
+      type: 'meta',
       transferId,
-      filename:    file.name,
-      mimeType:    file.type || 'application/octet-stream',
-      fileSize:    file.size,
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      fileSize: file.size,
       totalChunks: chunks.length,
-      sender:      currentUser.username,
-      ts:          Date.now(),
+      sender: currentUser.username,
+      ts: Date.now(),
     };
     mqttClient.publish(CONFIG.topics.roomFile(roomId, transferId), JSON.stringify(meta), { qos: 1 });
 
@@ -450,17 +496,22 @@ const App = (() => {
 
   // ── Presença ──────────────────────────────────────────────────────────────
   function _publishPresence(roomId, status) {
-    if (!mqttClient) return;
-    mqttClient.publish(
-      CONFIG.topics.roomPresence(roomId),
-      JSON.stringify({ username: currentUser.username, status, ts: Date.now() }),
-      { qos: 0, retain: false }
-    );
-    mqttClient.publish(
-      CONFIG.topics.userPresence(currentUser.username),
-      JSON.stringify({ username: currentUser.username, status, ts: Date.now() }),
-      { qos: 0, retain: true }
-    );
+    // P2P Presence
+    Storage.syncPresenceP2P(roomId, currentUser.username, status);
+
+    // MQTT Presence (Fallback)
+    if (mqttClient && mqttClient.connected) {
+      mqttClient.publish(
+        CONFIG.topics.roomPresence(roomId),
+        JSON.stringify({ username: currentUser.username, status, ts: Date.now() }),
+        { qos: 0, retain: false }
+      );
+      mqttClient.publish(
+        CONFIG.topics.userPresence(currentUser.username),
+        JSON.stringify({ username: currentUser.username, status, ts: Date.now() }),
+        { qos: 0, retain: true }
+      );
+    }
   }
 
   // ── Vigilantes de Rede e Saúde ───────────────────────────────────────────
@@ -512,12 +563,12 @@ const App = (() => {
       mqttClient.end(true);
       mqttClient = null;
     }
-    currentUser   = null;
-    currentRoom   = null;
-    rooms         = [];
+    currentUser = null;
+    currentRoom = null;
+    rooms = [];
     roomCryptoKeys = {};
-    onlineInRoom  = {};
-    unreadCounts  = {};
+    onlineInRoom = {};
+    unreadCounts = {};
     Storage.clearUser();
     Notifications.resetAll();
     UI.showLogin();

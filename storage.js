@@ -8,7 +8,7 @@ const Storage = (() => {
   let db  = null;
   let gun = null;
   const DB_NAME    = 'keepcalm_db';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
 
   // ── Hash do roomId para uso no Gun (privacidade do nome da sala) ──────────
   // Os relays Gun veem apenas o hash SHA-256, nunca o ID real da sala.
@@ -27,20 +27,39 @@ const Storage = (() => {
     }
 
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = (e) => {
-        const d = e.target.result;
-        if (!d.objectStoreNames.contains('messages')) {
-          const s = d.createObjectStore('messages', { keyPath: 'id', autoIncrement: true });
-          s.createIndex('roomId',    'roomId',    { unique: false });
-          s.createIndex('timestamp', 'timestamp', { unique: false });
-        }
-        if (!d.objectStoreNames.contains('files')) {
-          d.createObjectStore('files', { keyPath: 'transferId' });
-        }
-      };
-      req.onsuccess = (e) => { db = e.target.result; resolve(); };
-      req.onerror   = ()  => reject(new Error('Falha ao abrir banco local.'));
+      try {
+        console.log('[Storage] Abrindo IndexedDB:', DB_NAME, 'v', DB_VERSION);
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          console.log('[Storage] Upgrade necessário...');
+          const d = e.target.result;
+          if (!d.objectStoreNames.contains('messages')) {
+            const s = d.createObjectStore('messages', { keyPath: 'id' });
+            s.createIndex('roomId',    'roomId',    { unique: false });
+            s.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+          if (!d.objectStoreNames.contains('files')) {
+            d.createObjectStore('files', { keyPath: 'transferId' });
+          }
+          console.log('[Storage] Upgrade concluído.');
+        };
+        req.onsuccess = (e) => { 
+          db = e.target.result; 
+          console.log('[Storage] Banco aberto com sucesso.');
+          resolve(); 
+        };
+        req.onerror   = (ev)  => {
+          console.error('[Storage] Erro ao abrir banco:', ev);
+          reject(new Error('Falha ao abrir banco local.'));
+        };
+        req.onblocked = ()  => { 
+          console.warn('[Storage] Banco bloqueado por outra aba.'); 
+          alert('Por favor, feche outras abas do KeepCalm para atualizar o banco.');
+          resolve(); 
+        };
+      } catch (e) {
+        reject(e);
+      }
     });
   }
 
@@ -104,10 +123,53 @@ const Storage = (() => {
     if (!gun || !payloadObj.msgId) return;
     try {
       const roomHash = await _hashRoomId(roomId);
+      // Salva tanto no nó da sala quanto por ID único para replicação rápida
       gun.get('kc_v3').get(roomHash).get(payloadObj.msgId).put(JSON.stringify(payloadObj));
     } catch (e) {
-      console.warn('[Gun] Erro ao sincronizar:', e);
+      console.warn('[Gun] Erro ao sincronizar mensagem:', e);
     }
+  }
+
+  // ── Presença e Digitando P2P ──────────────────────────────────────────────
+  async function syncPresenceP2P(roomId, username, status) {
+    if (!gun) return;
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_presence').get(roomHash).get(username).put(JSON.stringify({ status, ts: Date.now() }));
+    } catch (e) {}
+  }
+
+  async function listenPresenceP2P(roomId, callback) {
+    if (!gun) return;
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_presence').get(roomHash).map().on((dataStr, username) => {
+        try {
+          if (dataStr && typeof dataStr === 'string') {
+            const data = JSON.parse(dataStr);
+            callback(username, data);
+          }
+        } catch (_) {}
+      });
+    } catch (e) {}
+  }
+
+  async function syncTypingP2P(roomId, username, isTyping) {
+    if (!gun) return;
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_typing').get(roomHash).get(username).put(isTyping ? Date.now() : 0);
+    } catch (e) {}
+  }
+
+  async function listenTypingP2P(roomId, callback) {
+    if (!gun) return;
+    try {
+      const roomHash = await _hashRoomId(roomId);
+      gun.get('kc_typing').get(roomHash).map().on((ts, username) => {
+        callback(username, ts);
+      });
+    } catch (e) {}
   }
 
   // Escuta o histórico descentralizado ao entrar numa sala.
@@ -148,18 +210,19 @@ const Storage = (() => {
   function setUser(data)  { /* Não salva o nome */ }
   function getUser()      { return null; }
   function clearUser()    { /* n/a */ }
-  // Verifica identidade no armazenamento local. Bloqueia se a senha do utilizador for incorreta.
   async function verifyUser(name, password) {
     const hash = await Crypto.hashPassword(password, name.toLowerCase());
     const lastHash = localStorage.getItem('kc_user_hash');
-    
-    // Se for um utilizador conhecido mas a senha não bater:
-    if (lastHash && lastHash !== hash) {
-      throw new Error('Credenciais de sessão inválidas. Apelido e Senha incompatíveis com o registo.');
+    const lastUser = localStorage.getItem('kc_last_user');
+
+    // Se mudou o usuário ou a senha, avisar que o contexto mudou (opcional no console)
+    if (lastUser && lastUser === name.toLowerCase() && lastHash && lastHash !== hash) {
+      console.warn('[Storage] Nova senha para o usuário existente. Rastro local agora inacessível.');
     }
-    
-    // Salva ou renova o hash válido do utilizador.
+
+    // Salva ou renova o hash válido do utilizador para esta sessão
     localStorage.setItem('kc_user_hash', hash);
+    localStorage.setItem('kc_last_user', name.toLowerCase());
   }
 
   // ── Sessões / Salas ───────────────────────────────────────────────────────
@@ -192,6 +255,8 @@ const Storage = (() => {
     saveMessage, getMessages, clearMessages, hasMessage,
     // P2P descentralizado (GunDB com IDs hasheados)
     syncMessageP2P, listenToRoomHistoryP2P,
+    syncPresenceP2P, listenPresenceP2P,
+    syncTypingP2P, listenTypingP2P,
     // Arquivos
     saveFile, getFile,
     // Usuário

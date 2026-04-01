@@ -51,17 +51,21 @@ const UI = (() => {
     $('modal-room-password').addEventListener('keydown', e => { if (e.key === 'Enter') _handleJoinRoom(); });
 
     // Enviar mensagem
-    $('send-btn').addEventListener('click', _handleSend);
     $('msg-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         _handleSend();
       } else {
         const { currentRoom } = App.getState();
-        if (currentRoom) App.sendTyping(currentRoom);
+        if (currentRoom) {
+          // Debounce typing notification
+          if (_typingTimeout) clearTimeout(_typingTimeout);
+          _typingTimeout = setTimeout(() => App.sendTyping(currentRoom), 100);
+        }
       }
     });
     $('msg-input').addEventListener('input', _autoResize);
+    $('msg-input').addEventListener('focus', _autoResize);
 
     // Arquivo
     $('file-btn').addEventListener('click', () => $('file-input').click());
@@ -128,15 +132,19 @@ const UI = (() => {
     if (!roomId || !password) { _showModalError('Preencha todos os campos.'); return; }
     $('modal-confirm').disabled = true;
     $('modal-confirm').textContent = 'Entrando…';
+    console.info('[UI] handleJoinRoom iniciado');
     try {
       const cleanId = await App.joinRoom(roomId, password);
+      console.info('[UI] App.joinRoom retornou:', cleanId);
       hideModal('join-room-modal');
       $('modal-room-id').value = '';
       $('modal-room-password').value = '';
       _clearModalError();
       renderRoomsList(App.getState().rooms, App.getState().unreadCounts);
+      console.info('[UI] Trocando para sala:', cleanId);
       await App.switchRoom(cleanId);
     } catch (e) {
+      console.error('[UI] Erro ao entrar:', e);
       _showModalError(e.message || 'Erro ao entrar na sala.');
     } finally {
       $('modal-confirm').disabled = false;
@@ -150,9 +158,23 @@ const UI = (() => {
     const input = $('msg-input');
     const text  = input.value.trim();
     if (!text) return;
+
+    // Echo otimista: limpa imediatamente
     input.value = '';
     input.style.height = 'auto';
-    await App.sendMessage(currentRoom, text);
+    input.focus();
+
+    try {
+      // Não espera a rede para liberar a UI
+      App.sendMessage(currentRoom, text).catch(err => {
+        console.error('[App] Erro ao enviar:', err);
+        // Devolve o texto em caso de erro fatal
+        input.value = text;
+        _autoResize();
+      });
+    } catch (e) {
+      console.error('[UI] Falha no disparo:', e);
+    }
   }
 
   async function _handleFileSelect(e) {
@@ -185,8 +207,10 @@ const UI = (() => {
 
   function _autoResize() {
     const el = $('msg-input');
+    if (!el) return;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    const newHeight = Math.max(40, Math.min(el.scrollHeight, 150));
+    el.style.height = newHeight + 'px';
   }
 
   // ── Telas ─────────────────────────────────────────────────────────────────
@@ -323,6 +347,25 @@ const UI = (() => {
 
   function appendMessage(msg) {
     _renderMessage(msg, true);
+    _scrollToBottom();
+  }
+
+  function setMessages(messages) {
+    const container = $('messages-area');
+    container.innerHTML = '';
+    if (messages.length === 0) {
+      container.innerHTML = `
+        <div class="no-messages">
+          <div class="lock-icon-lg"><svg><use href="#icon-lock"/></svg></div>
+          <p>Nenhuma mensagem ainda.<br>Sessão cifrada ponta a ponta.</p>
+        </div>`;
+    } else {
+      messages.forEach(msg => _renderMessage(msg, false));
+    }
+    _scrollToBottom(true);
+  }
+
+  function scrollToBottom() {
     _scrollToBottom();
   }
 
@@ -624,7 +667,9 @@ const UI = (() => {
     highlightRoom,
     setRoomBadge,
     renderChatRoom,
+    setMessages,
     appendMessage,
+    scrollToBottom,
     updateOnlineList,
     updateGlobalUserStatus,
     showTyping,

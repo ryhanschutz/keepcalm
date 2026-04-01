@@ -1328,17 +1328,27 @@
   <script src="./app.js"></script>
 
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      UI.init();
-      App.init();
-
-      // Iniciar Avatar
-      const unameEl = document.getElementById('current-username');
-      const avatarEl = document.getElementById('user-avatar');
-      new MutationObserver(() => {
-        const n = unameEl.textContent.trim();
-        if (n && n !== '—') avatarEl.textContent = n[0].toUpperCase();
-      }).observe(unameEl, { childList: true, characterData: true, subtree: true });
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        console.log('Iniciando KeepCalm UI...');
+        UI.init();
+        
+        console.log('Iniciando KeepCalm App...');
+        await App.init();
+        
+        // Iniciar Avatar
+        const unameEl = document.getElementById('current-username');
+        const avatarEl = document.getElementById('user-avatar');
+        if (unameEl && avatarEl) {
+          new MutationObserver(() => {
+            const n = unameEl.textContent.trim();
+            if (n && n !== '—') avatarEl.textContent = n[0].toUpperCase();
+          }).observe(unameEl, { childList: true, characterData: true, subtree: true });
+        }
+      } catch (e) {
+        console.error('Falha crítica na inicialização:', e);
+        alert('Erro ao carregar o aplicativo: ' + e.message);
+      }
     });
   </script>
 
